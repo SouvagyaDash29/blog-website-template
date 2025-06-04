@@ -11,6 +11,7 @@ const BlogList = () => {
   return (
     <div className="blog-list">
       <h2>Latest Blogs</h2>
+      <Link to="/edit">add Blogs</Link>
       {blogs.length === 0 ? (
         <p>No blogs found. <Link to="/edit">Create your first blog</Link></p>
       ) : (

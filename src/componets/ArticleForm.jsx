@@ -1,35 +1,53 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, setDoc, serverTimestamp, collection } from 'firebase/firestore';
+import { doc, setDoc, serverTimestamp, collection, getDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { useBlog } from '../hooks/useBlog';
-import { constructImageUrl } from '../utils/imageUrl';
 
-const BlogForm = () => {
+const ArticleForm = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { blog, blogContent } = useBlog(id);
   const [loading, setLoading] = useState(false);
+  const [articleType, setArticleType] = useState('news'); // 'news' or 'event'
   
   const [formData, setFormData] = useState({
     title: '',
     tagline: '',
     coverImagePath: '',
     sections: [],
-    category: ''
+    category: 'news'
   });
 
   useEffect(() => {
-    if (id && blog && blogContent) {
-      setFormData({
-        title: blog.title,
-        tagline: blog.tagline,
-        coverImagePath: blog.coverImage.replace('https://cdn.jsdelivr.net/gh/AtomwalkCodeBase/Blogs@main/', ''),
-        sections: blogContent.sections,
-        category: blog.category || ''
-      });
+    if (id) {
+      const fetchArticle = async () => {
+        try {
+          const [metadataDoc, contentDoc] = await Promise.all([
+            getDoc(doc(db, 'articles_metadata', id)),
+            getDoc(doc(db, 'articles_content', id))
+          ]);
+
+          if (metadataDoc.exists() && contentDoc.exists()) {
+            const metadata = metadataDoc.data();
+            const content = contentDoc.data();
+            setArticleType(metadata.category);
+            
+            setFormData({
+              title: metadata.title,
+              tagline: metadata.tagline,
+              coverImagePath: metadata.coverImage.replace('https://cdn.jsdelivr.net/gh/AtomwalkCodeBase/Blogs@main/', ''),
+              sections: content.sections,
+              category: metadata.category
+            });
+          }
+        } catch (error) {
+          console.error('Error fetching article:', error);
+          alert('Error loading article. Please try again.');
+        }
+      };
+
+      fetchArticle();
     }
-  }, [id, blog, blogContent]);
+  }, [id]);
 
   const addSection = () => {
     setFormData(prev => ({
@@ -57,7 +75,7 @@ const BlogForm = () => {
   const addContent = (sectionIndex, type) => {
     const newContent = {
       type,
-      data: type === 'paragraph' || type === 'image' ? '' : []
+      data: type === 'paragraph' || type === 'image' || type === 'richText' ? '' : []
     };
     
     setFormData(prev => ({
@@ -148,20 +166,41 @@ const BlogForm = () => {
     }));
   };
 
+  const formatText = (text, format) => {
+    switch (format) {
+      case 'bold':
+        return `<strong>${text}</strong>`;
+      case 'italic':
+        return `<em>${text}</em>`;
+      case 'underline':
+        return `<u>${text}</u>`;
+      case 'h1':
+        return `<h1>${text}</h1>`;
+      case 'h2':
+        return `<h2>${text}</h2>`;
+      // case 'ul':
+      //   return `<ul><li>${text}</li></ul>`;
+      // case 'ol':
+      //   return `<ol><li>${text}</li></ol>`;
+      default:
+        return text;
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const blogId = id || doc(collection(db, 'blogs')).id;
-      const coverImageUrl = constructImageUrl(formData.coverImagePath);
+      const articleId = id || doc(collection(db, 'articles_metadata')).id;
+      const coverImageUrl = `https://cdn.jsdelivr.net/gh/AtomwalkCodeBase/Blogs@main/${formData.coverImagePath}`;
 
-      // Save blog metadata
-      await setDoc(doc(db, 'blogs', blogId), {
+      // Save article metadata
+      await setDoc(doc(db, 'articles_metadata', articleId), {
         title: formData.title,
         tagline: formData.tagline,
         coverImage: coverImageUrl,
-        category: formData.category,
+        category: articleType,
         publishedAt: serverTimestamp()
       });
 
@@ -170,26 +209,29 @@ const BlogForm = () => {
         ...section,
         contents: section.contents.map(content => ({
           ...content,
-          data: content.type === 'image' ? constructImageUrl(content.data) : content.data
+          data: content.type === 'image' 
+            ? `https://cdn.jsdelivr.net/gh/AtomwalkCodeBase/Blogs@main/${content.data}`
+            : content.data
         }))
       }));
 
-      // Save blog content
-      await setDoc(doc(db, 'blogs_content', blogId), {
-        blogId,
+      // Save article content
+      await setDoc(doc(db, 'articles_content', articleId), {
+        articleId,
         header: {
           title: formData.title,
           tagline: formData.tagline,
           coverImage: coverImageUrl
         },
         sections: processedSections,
-        summary: formData.tagline
+        summary: formData.tagline,
+        category: articleType
       });
 
-      navigate(`/blog/${blogId}`);
+      navigate(`/${articleType}/${articleId}`);
     } catch (error) {
-      console.error('Error saving blog:', error);
-      alert('Error saving blog. Please try again.');
+      console.error('Error saving article:', error);
+      alert('Error saving article. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -205,6 +247,84 @@ const BlogForm = () => {
             placeholder="Enter paragraph text..."
             rows={4}
           />
+        );
+      case 'richText':
+        return (
+          <div className="rich-text-editor">
+            <div className="formatting-toolbar">
+              <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'bold'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>Bold</button>
+              <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'italic'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>Italic</button>
+              <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'underline'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>Underline</button>
+              <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'h1'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>H1</button>
+              <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'h2'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>H2</button>
+              {/* <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'ul'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>Bullet List</button>
+              <button type="button" onClick={() => {
+                const text = content.data;
+                const selection = window.getSelection();
+                const selectedText = selection.toString();
+                if (selectedText) {
+                  const newText = text.replace(selectedText, formatText(selectedText, 'ol'));
+                  updateContent(sectionIndex, contentIndex, newText);
+                }
+              }}>Numbered List</button> */}
+            </div>
+            <textarea
+              value={content.data}
+              onChange={(e) => updateContent(sectionIndex, contentIndex, e.target.value)}
+              placeholder="Enter rich text content..."
+              rows={6}
+              className="rich-textarea"
+            />
+            <div className="preview" dangerouslySetInnerHTML={{ __html: content.data }} />
+          </div>
         );
       case 'image':
         return (
@@ -251,10 +371,22 @@ const BlogForm = () => {
   };
 
   return (
-    <div className="blog-form">
-      <h2>{id ? 'Edit Blog' : 'Create New Blog'}</h2>
+    <div className="article-form">
+      <h2>{id ? 'Edit Article' : 'Create New Article'}</h2>
       
       <form onSubmit={handleSubmit}>
+        <div className="form-group">
+          <label>Article Type</label>
+          <select
+            value={articleType}
+            onChange={(e) => setArticleType(e.target.value)}
+            disabled={!!id}
+          >
+            <option value="news">News</option>
+            <option value="event">Event</option>
+          </select>
+        </div>
+
         <div className="form-group">
           <label>Title</label>
           <input
@@ -282,17 +414,6 @@ const BlogForm = () => {
             value={formData.coverImagePath}
             onChange={(e) => setFormData(prev => ({ ...prev, coverImagePath: e.target.value }))}
             placeholder="folder/image.jpg"
-            required
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Category</label>
-          <input
-            type="text"
-            value={formData.category}
-            onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value }))}
-            placeholder="Enter category e.g. Web Development"
             required
           />
         </div>
@@ -354,6 +475,9 @@ const BlogForm = () => {
                   <button type="button" onClick={() => addContent(sectionIndex, 'paragraph')}>
                     Add Paragraph
                   </button>
+                  <button type="button" onClick={() => addContent(sectionIndex, 'richText')}>
+                    Add Rich Text
+                  </button>
                   <button type="button" onClick={() => addContent(sectionIndex, 'bullets')}>
                     Add Bullets
                   </button>
@@ -375,7 +499,7 @@ const BlogForm = () => {
 
         <div className="form-actions">
           <button type="submit" disabled={loading}>
-            {loading ? 'Saving...' : (id ? 'Update Blog' : 'Create Blog')}
+            {loading ? 'Saving...' : (id ? 'Update Article' : 'Create Article')}
           </button>
           <button type="button" onClick={() => navigate('/')}>
             Cancel
@@ -386,4 +510,4 @@ const BlogForm = () => {
   );
 };
 
-export default BlogForm;
+export default ArticleForm; 
